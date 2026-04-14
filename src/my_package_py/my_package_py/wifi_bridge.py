@@ -1,48 +1,85 @@
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import String
+from std_srvs.srv import SetBool  # 서비스 타입 추가
 import socket
-from my_msg_interface.srv import MotorCmd
+import threading
 
-class WifiBridge(Node):
+class WifiBridgeNode(Node):
     def __init__(self):
-        super().__init__('wifi_bridge')
-        self.srv = self.create_service(MotorCmd, 'control_motor', self.motor_callback)
+        super().__init__('wifi_bridge_node')
+        self.imu_pub = self.create_publisher(String, 'imu_data', 10)
         
-        # ESP32의 IP 주소와 포트 번호를 입력하세요 (시리얼 모니터에서 확인한 IP)
-        self.esp32_ip = "192.168.0.61" 
-        self.port = 8888
-        
-        try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.connect((self.esp32_ip, self.port))
-            self.get_logger().info('무선 연결(Wi-Fi) 성공! 모터 제어 준비 완료.')
-        except Exception as e:
-            self.get_logger().error(f'연결 실패! IP 주소나 ESP32 전원을 확인하세요: {e}')
+        # 1. 모터 제어용 서비스 서버 생성 (웹캠 노드가 호출할 서비스)
+        self.srv = self.create_service(SetBool, 'motor_control', self.motor_control_callback)
 
-    def motor_callback(self, request, response):
+        self.esp32_ip = '192.168.0.61'
+        self.esp32_port = 8888
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        
         try:
-            # 클라이언트로부터 받은 'a' 또는 'b'를 Wi-Fi(소켓)를 통해 ESP32로 전송
-            self.sock.send(request.command.encode('utf-8'))
+            self.sock.connect((self.esp32_ip, self.esp32_port))
+            self.get_logger().info('ESP32 연결 성공! 서비스 서버 대기 중...')
+        except Exception as e:
+            self.get_logger().error(f'연결 실패: {e}')
+            return
+
+        # 아두이노에 데이터 요청('R')을 보내는 타이머
+        self.timer = self.create_timer(0.5, self.request_data)
+        self.receive_thread = threading.Thread(target=self.receive_data, daemon=True)
+        self.receive_thread.start()
+
+    # 2. 서비스 요청이 들어왔을 때 실행되는 콜백 함수
+    def motor_control_callback(self, request, response):
+        # request.data가 True면 'F'(전진), False면 'S'(정지)
+        cmd = 'F' if request.data else 'S'
+        try:
+            self.sock.sendall(cmd.encode('utf-8'))
+            self.get_logger().info(f'웹캠 서비스 요청 받음 -> ESP32 전송: {cmd}')
             response.success = True
-            response.message = f"명령 '{request.command}' 무선 전송 완료"
-            self.get_logger().info(f"ESP32로 '{request.command}' 전송함")
+            response.message = f"Motor set to {cmd}"
         except Exception as e:
             response.success = False
-            response.message = f"전송 오류: {str(e)}"
-            self.get_logger().error(response.message)
-            
+            response.message = str(e)
+            self.get_logger().error(f'전송 에러: {e}')
+        
         return response
+
+    def request_data(self):
+        try:
+            self.sock.sendall(b'R')
+        except:
+            pass
+
+    def receive_data(self):
+        buffer = ""
+        while rclpy.ok():
+            try:
+                data = self.sock.recv(1024).decode('utf-8', errors='ignore')
+                if not data: break
+                buffer += data
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
+                    line = line.strip()
+                    if 'IMU' in line:
+                        clean_line = line[line.find('IMU'):]
+                        imu_msg = String()
+                        imu_msg.data = clean_line
+                        self.imu_pub.publish(imu_msg)
+            except:
+                break
 
 def main(args=None):
     rclpy.init(args=args)
-    node = WifiBridge() # 클래스 이름이 WifiBridge로 바뀜
+    node = WifiBridgeNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            node.destroy_node()
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
