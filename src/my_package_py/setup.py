@@ -1,4 +1,6 @@
 from setuptools import find_packages, setup
+import os
+from glob import glob
 
 package_name = 'my_package_py'
 
@@ -10,6 +12,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'urdf'), glob(os.path.join('urdf', '*.urdf'))), #(urdf 폴더 안의 모든 *.urdf 파일을 설치 폴더로 복사함)
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -38,6 +42,10 @@ setup(
             'arduino_bridge = my_package_py.arduino_bridge:main',
             'motor_server = my_package_py.motor_server:main',
             'motor_client = my_package_py.motor_client:main',
+            'imu_pub = my_package_py.imu_publisher:main',
+            'wifi_bridge = my_package_py.wifi_bridge:main',
+            'teleop_node = my_package_py.teleop_node:main',
+            'webcam_node = my_package_py.webcam_node:main',
         ],
     },
 )
